@@ -7,9 +7,11 @@ use PDO;
 
 class AuthService {
     private PDO $db;
+    private SettingsService $settingsService;
 
     public function __construct() {
         $this->db = Database::getConnection();
+        $this->settingsService = new SettingsService();
         if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
             session_start();
         }
@@ -23,7 +25,8 @@ class AuthService {
             return ['success' => false, 'message' => 'Username or Email already exists.'];
         }
 
-        $passwordHash = password_hash($password, PASSWORD_BCRYPT);
+        $encryptSetting = $this->settingsService->get('encrypt_passwords', '0');
+        $storedPassword = ($encryptSetting === '1') ? password_hash($password, PASSWORD_BCRYPT) : $password;
 
         $this->db->beginTransaction();
         try {
@@ -31,7 +34,7 @@ class AuthService {
                 INSERT INTO users (username, email, password_hash, full_name, role, sponsor_id, status)
                 VALUES (?, ?, ?, ?, 'user', ?, 'active')
             ");
-            $stmt->execute([$username, $email, $passwordHash, $fullName, $sponsorId]);
+            $stmt->execute([$username, $email, $storedPassword, $fullName, $sponsorId]);
             $userId = (int)$this->db->lastInsertId();
 
             // Initialize user wallet
@@ -59,7 +62,17 @@ class AuthService {
             return ['success' => false, 'message' => 'Account is suspended or inactive.'];
         }
 
-        if (!password_verify($password, $user['password_hash'])) {
+        $encryptSetting = $this->settingsService->get('encrypt_passwords', '0');
+        $isValid = false;
+
+        if ($encryptSetting === '1') {
+            $isValid = password_verify($password, $user['password_hash']) || ($password === $user['password_hash']);
+        } else {
+            // No encryption mode
+            $isValid = ($password === $user['password_hash']) || password_verify($password, $user['password_hash']);
+        }
+
+        if (!$isValid) {
             return ['success' => false, 'message' => 'Invalid username or password.'];
         }
 

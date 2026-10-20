@@ -73,7 +73,8 @@ class Database {
                 ['company_wallet_user_id', '1', 'User ID representing Company Account'],
                 ['min_payout_amount', '100', 'Minimum Withdrawable Amount (INR)'],
                 ['max_payout_amount', '50000', 'Maximum Single Payout Request Amount (INR)'],
-                ['allow_self_registration', '1', 'Allow direct user registration with ePIN']
+                ['allow_self_registration', '1', 'Allow direct user registration with ePIN'],
+                ['encrypt_passwords', '0', 'Password Encryption Enabled (0 = Disabled/Plaintext, 1 = Enabled/BCrypt)']
             ];
 
             $insertStmt = $pdo->prepare("INSERT INTO settings (setting_key, setting_value, description) VALUES (?, ?, ?)");
@@ -101,7 +102,12 @@ class Database {
         // Check if users table is empty
         $stmt = $pdo->query("SELECT COUNT(*) as cnt FROM users");
         if ((int)$stmt->fetch()['cnt'] === 0) {
-            $adminPassword = password_hash('admin123', PASSWORD_BCRYPT);
+            // Check default encryption setting
+            $stmtEnc = $pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'encrypt_passwords'");
+            $encVal = $stmtEnc ? $stmtEnc->fetch() : null;
+            $useEncryption = ($encVal && $encVal['setting_value'] === '1');
+
+            $adminPassword = $useEncryption ? password_hash('admin123', PASSWORD_BCRYPT) : 'admin123';
 
             // 1. Create Super Admin User
             $insertAdmin = $pdo->prepare("INSERT INTO users (username, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)");

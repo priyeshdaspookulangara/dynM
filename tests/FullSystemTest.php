@@ -38,6 +38,7 @@ class FullSystemTest {
         echo "=== STARTING COMPREHENSIVE SYSTEM TESTS ===\n\n";
 
         $this->testSettingsEngine();
+        $this->testPasswordEncryptionToggle();
         $this->testPackageManagement();
         $this->testEpinLifecycle();
         $this->testForcedMatrixSpillover();
@@ -48,7 +49,7 @@ class FullSystemTest {
     }
 
     private function testSettingsEngine(): void {
-        echo "[1/6] Testing Dynamic Settings Engine...\n";
+        echo "[1/7] Testing Dynamic Settings Engine...\n";
 
         $this->settingsService->set('matrix_width', '3', '3xN Matrix');
         $this->settingsService->set('matrix_depth', '5', 'Depth 5');
@@ -71,8 +72,41 @@ class FullSystemTest {
         echo " -> Dynamic Settings Engine Test Passed.\n";
     }
 
+    private function testPasswordEncryptionToggle(): void {
+        echo "[2/7] Testing Password Encryption Strategy (Plaintext vs BCrypt)...\n";
+
+        // 1. By default, encrypt_passwords is 0 (Plaintext)
+        $this->settingsService->set('encrypt_passwords', '0');
+        $uPlain = $this->auth->registerUser('plain_user', 'plain@test.com', 'Plain User', 'secret123', 1);
+
+        $db = Database::getConnection();
+        $stmt = $db->prepare("SELECT password_hash FROM users WHERE id = ?");
+        $stmt->execute([$uPlain['user_id']]);
+        $storedPlain = $stmt->fetch()['password_hash'];
+        assert($storedPlain === 'secret123', 'Password should be stored in plaintext when encryption is disabled');
+
+        $loginPlain = $this->auth->login('plain_user', 'secret123');
+        assert($loginPlain['success'], 'Plaintext login should succeed');
+
+        // 2. Enable Encryption (encrypt_passwords = 1)
+        $this->settingsService->set('encrypt_passwords', '1');
+        $uEnc = $this->auth->registerUser('enc_user', 'enc@test.com', 'Encrypted User', 'secret123', 1);
+
+        $stmt->execute([$uEnc['user_id']]);
+        $storedEnc = $stmt->fetch()['password_hash'];
+        assert(strpos($storedEnc, '$2y$') === 0, 'Password should be BCrypt hashed when encryption is enabled');
+
+        $loginEnc = $this->auth->login('enc_user', 'secret123');
+        assert($loginEnc['success'], 'Encrypted password login should succeed');
+
+        // Reset to default
+        $this->settingsService->set('encrypt_passwords', '0');
+
+        echo " -> Password Encryption Toggle Test Passed.\n";
+    }
+
     private function testPackageManagement(): void {
-        echo "[2/6] Testing Package Management...\n";
+        echo "[3/7] Testing Package Management...\n";
 
         $pkgId = $this->pkgService->createPackage([
             'name' => 'Custom Starter Tier',
@@ -93,7 +127,7 @@ class FullSystemTest {
     }
 
     private function testEpinLifecycle(): void {
-        echo "[3/6] Testing ePIN Generation & Assignment...\n";
+        echo "[4/7] Testing ePIN Generation & Assignment...\n";
 
         $packages = $this->pkgService->getAllPackages(true);
         $pkgId = $packages[0]['id'];
@@ -114,7 +148,7 @@ class FullSystemTest {
     }
 
     private function testForcedMatrixSpillover(): void {
-        echo "[4/6] Testing Forced Matrix BFS Spillover Placement...\n";
+        echo "[5/7] Testing Forced Matrix BFS Spillover Placement...\n";
 
         // Create Sponsor chain: Root (ID 1) -> User A -> Users B, C, D, E
         $uA = $this->auth->registerUser('user_a', 'a@test.com', 'User A', 'pass123', 1);
@@ -148,16 +182,15 @@ class FullSystemTest {
     }
 
     private function testCompensationDistributionsAndDualWallet(): void {
-        echo "[5/6] Testing Compensation Distribution & Dual-Wallet Splits...\n";
+        echo "[6/7] Testing Compensation Distribution & Dual-Wallet Splits...\n";
 
-        // Check balances after activations in test 4
-        // Direct referral bonus for User A sponsoring B, C, D, E (4 users)
-        // Package price: ₹1000, Direct Referral: 10% = ₹100 per activation.
-        // Wallet Split: 60% User, 40% Company
-        // User A gets ₹60 per user * 4 users = ₹240
-        $uA_id = 3; // User A ID
+        // Check balances after activations
+        $db = Database::getConnection();
+        $stmtUA = $db->prepare("SELECT id FROM users WHERE username = 'user_a'");
+        $stmtUA->execute();
+        $uA_id = $stmtUA->fetch()['id'];
+
         $walletA = $this->walletService->getWallet($uA_id);
-
         assert((float)$walletA['user_wallet_balance'] >= 240.00, 'User A balance should be at least 240');
 
         $transactionsA = $this->walletService->getTransactions($uA_id);
@@ -167,9 +200,13 @@ class FullSystemTest {
     }
 
     private function testPayoutWorkflow(): void {
-        echo "[6/6] Testing Withdrawal Payout Workflow...\n";
+        echo "[7/7] Testing Withdrawal Payout Workflow...\n";
 
-        $uA_id = 3;
+        $db = Database::getConnection();
+        $stmtUA = $db->prepare("SELECT id FROM users WHERE username = 'user_a'");
+        $stmtUA->execute();
+        $uA_id = $stmtUA->fetch()['id'];
+
         $walletA = $this->walletService->getWallet($uA_id);
         $initialBal = (float)$walletA['user_wallet_balance'];
 

@@ -20,6 +20,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $settingsService->set('min_payout_amount', (string)(float)$_POST['min_payout_amount'], 'Minimum Payout Amount');
         $settingsService->set('max_payout_amount', (string)(float)$_POST['max_payout_amount'], 'Maximum Single Payout Request Amount');
         $settingsService->set('company_wallet_user_id', (string)(int)$_POST['company_wallet_user_id'], 'Company Account User ID');
+        $settingsService->set('encrypt_passwords', (string)($_POST['encrypt_passwords'] ?? '0'), 'Password Encryption Enabled');
 
         $message = "General system parameters updated successfully!";
     } elseif (isset($_POST['update_level_commissions'])) {
@@ -67,6 +68,15 @@ require_once __DIR__ . '/../templates/layouts/header.php';
             </div>
             <div class="card-body">
                 <form method="POST" action="settings.php">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Password Encryption Strategy</label>
+                        <select name="encrypt_passwords" class="form-select">
+                            <option value="0" <?= ($allSettings['encrypt_passwords']['value'] ?? '0') === '0' ? 'selected' : '' ?>>Disabled / Plaintext (Default)</option>
+                            <option value="1" <?= ($allSettings['encrypt_passwords']['value'] ?? '0') === '1' ? 'selected' : '' ?>>Enabled / BCrypt Hash</option>
+                        </select>
+                        <small class="text-muted">Determines whether passwords created or updated are stored as plaintext or hashed.</small>
+                    </div>
+
                     <div class="mb-3">
                         <label class="form-label fw-bold">Forced Matrix Width</label>
                         <input type="number" name="matrix_width" class="form-control" value="<?= htmlspecialchars($allSettings['matrix_width']['value'] ?? 3) ?>" min="1" max="10" required>
