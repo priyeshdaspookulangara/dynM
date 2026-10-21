@@ -44,12 +44,13 @@ class FullSystemTest {
         $this->testForcedMatrixSpillover();
         $this->testCompensationDistributionsAndDualWallet();
         $this->testPayoutWorkflow();
+        $this->testAdminMemberActivation();
 
         echo "\n=== ALL TESTS PASSED SUCCESSFULLY! ===\n";
     }
 
     private function testSettingsEngine(): void {
-        echo "[1/7] Testing Dynamic Settings Engine...\n";
+        echo "[1/8] Testing Dynamic Settings Engine...\n";
 
         $this->settingsService->set('matrix_width', '3', '3xN Matrix');
         $this->settingsService->set('matrix_depth', '5', 'Depth 5');
@@ -73,7 +74,7 @@ class FullSystemTest {
     }
 
     private function testPasswordEncryptionToggle(): void {
-        echo "[2/7] Testing Password Encryption Strategy (Plaintext vs BCrypt)...\n";
+        echo "[2/8] Testing Password Encryption Strategy (Plaintext vs BCrypt)...\n";
 
         // 1. By default, encrypt_passwords is 0 (Plaintext)
         $this->settingsService->set('encrypt_passwords', '0');
@@ -106,7 +107,7 @@ class FullSystemTest {
     }
 
     private function testPackageManagement(): void {
-        echo "[3/7] Testing Package Management...\n";
+        echo "[3/8] Testing Package Management...\n";
 
         $pkgId = $this->pkgService->createPackage([
             'name' => 'Custom Starter Tier',
@@ -127,7 +128,7 @@ class FullSystemTest {
     }
 
     private function testEpinLifecycle(): void {
-        echo "[4/7] Testing ePIN Generation & Assignment...\n";
+        echo "[4/8] Testing ePIN Generation & Assignment...\n";
 
         $packages = $this->pkgService->getAllPackages(true);
         $pkgId = $packages[0]['id'];
@@ -148,7 +149,7 @@ class FullSystemTest {
     }
 
     private function testForcedMatrixSpillover(): void {
-        echo "[5/7] Testing Forced Matrix BFS Spillover Placement...\n";
+        echo "[5/8] Testing Forced Matrix BFS Spillover Placement...\n";
 
         // Create Sponsor chain: Root (ID 1) -> User A -> Users B, C, D, E
         $uA = $this->auth->registerUser('user_a', 'a@test.com', 'User A', 'pass123', 1);
@@ -182,7 +183,7 @@ class FullSystemTest {
     }
 
     private function testCompensationDistributionsAndDualWallet(): void {
-        echo "[6/7] Testing Compensation Distribution & Dual-Wallet Splits...\n";
+        echo "[6/8] Testing Compensation Distribution & Dual-Wallet Splits...\n";
 
         // Check balances after activations
         $db = Database::getConnection();
@@ -200,7 +201,7 @@ class FullSystemTest {
     }
 
     private function testPayoutWorkflow(): void {
-        echo "[7/7] Testing Withdrawal Payout Workflow...\n";
+        echo "[7/8] Testing Withdrawal Payout Workflow...\n";
 
         $db = Database::getConnection();
         $stmtUA = $db->prepare("SELECT id FROM users WHERE username = 'user_a'");
@@ -229,6 +230,30 @@ class FullSystemTest {
         assert((float)$walletAAfterRefund['user_wallet_balance'] === $initialBal, 'Balance should be refunded back to initial balance');
 
         echo " -> Withdrawal Payout Workflow Test Passed.\n";
+    }
+
+    private function testAdminMemberActivation(): void {
+        echo "[8/8] Testing Admin Direct Member Activation...\n";
+
+        // Register pending user
+        $pendingUser = $this->auth->registerUser('pending_user', 'pending@test.com', 'Pending User', 'pass123', 1);
+        $userId = $pendingUser['user_id'];
+
+        // Auto-generate ePIN and activate
+        $packages = $this->pkgService->getAllPackages(true);
+        $generated = $this->epinService->generateEpins($packages[0]['id'], 1, 1, $userId);
+        $epinCode = $generated[0]['code'];
+
+        $actRes = $this->engine->activateUserWithEpin($userId, $epinCode);
+        assert($actRes['success'], 'Admin direct member activation should succeed');
+
+        $db = Database::getConnection();
+        $stmt = $db->prepare("SELECT depth FROM matrix_nodes WHERE user_id = ?");
+        $stmt->execute([$userId]);
+        $node = $stmt->fetch();
+        assert($node !== false, 'Activated member must have entry in matrix_nodes');
+
+        echo " -> Admin Direct Member Activation Test Passed.\n";
     }
 }
 

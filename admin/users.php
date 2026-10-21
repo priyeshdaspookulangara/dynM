@@ -3,10 +3,16 @@ require_once __DIR__ . '/../src/bootstrap.php';
 
 use App\Services\AuthService;
 use App\Services\SettingsService;
+use App\Services\EpinService;
+use App\Services\PackageService;
+use App\Services\CompensationEngine;
 use App\Core\Database;
 
 $currentUser = AuthService::requireAdmin();
 $settingsService = new SettingsService();
+$epinService = new EpinService();
+$pkgService = new PackageService();
+$engine = new CompensationEngine();
 $db = Database::getConnection();
 
 $message = '';
@@ -14,6 +20,44 @@ $error = '';
 
 // Fetch all possible sponsors for dropdown selection
 $allSponsors = $db->query("SELECT id, username, full_name FROM users ORDER BY username ASC")->fetchAll();
+
+// Fetch all unused ePINs for admin activation selection
+$unusedEpins = $db->query("
+    SELECT e.id, e.code, p.name as package_name, p.price as package_price
+    FROM epins e
+    JOIN packages p ON e.package_id = p.id
+    WHERE e.status = 'unused'
+    ORDER BY e.id DESC
+")->fetchAll();
+
+// Fetch active packages for administrative auto-ePIN generation
+$activePackages = $pkgService->getAllPackages(true);
+
+// Handle Admin Direct Member Activation
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_activate_user'])) {
+    $targetUserId = (int)$_POST['target_user_id'];
+    $epinCode = trim($_POST['epin_code'] ?? '');
+    $selectedPkgId = !empty($_POST['package_id']) ? (int)$_POST['package_id'] : null;
+
+    if (empty($epinCode) && $selectedPkgId) {
+        // Auto-generate ePIN for the selected package
+        $generated = $epinService->generateEpins($selectedPkgId, 1, $currentUser['id'], $targetUserId);
+        if (!empty($generated)) {
+            $epinCode = $generated[0]['code'];
+        }
+    }
+
+    if (empty($epinCode)) {
+        $error = "Please select an existing unused ePIN or a package to auto-generate an ePIN.";
+    } else {
+        $actRes = $engine->activateUserWithEpin($targetUserId, $epinCode);
+        if ($actRes['success']) {
+            $message = "Member successfully activated in matrix with ePIN '{$epinCode}'!";
+        } else {
+            $error = "Activation failed: " . $actRes['message'];
+        }
+    }
+}
 
 // Handle User Details Update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_user'])) {
@@ -79,7 +123,7 @@ require_once __DIR__ . '/../templates/layouts/header.php';
 <div class="row mb-4">
     <div class="col-md-12">
         <h2 class="fw-bold"><i class="bi bi-people-fill text-primary me-2"></i>User Management</h2>
-        <p class="text-muted">Manage registered users, edit personal profiles, set passwords, sponsor tree placement, and roles/permissions.</p>
+        <p class="text-muted">Manage registered users, edit personal profiles, set passwords, sponsor tree placement, and activate pending members in matrix.</p>
     </div>
 </div>
 
@@ -99,7 +143,6 @@ require_once __DIR__ . '/../templates/layouts/header.php';
                         <th>#ID</th>
                         <th>User</th>
                         <th>Email</th>
-                        <th>Password</th>
                         <th>Sponsor</th>
                         <th>Role</th>
                         <th>Wallet Balance</th>
@@ -117,9 +160,6 @@ require_once __DIR__ . '/../templates/layouts/header.php';
                                 <small class="text-primary">@<?= htmlspecialchars($u['username']) ?></small>
                             </td>
                             <td><?= htmlspecialchars($u['email']) ?></td>
-                            <td>
-                                <small class="text-muted"><code><?= htmlspecialchars(substr($u['password_hash'], 0, 15)) . (strlen($u['password_hash']) > 15 ? '...' : '') ?></code></small>
-                            </td>
                             <td><?= htmlspecialchars($u['sponsor_name'] ?? 'System Direct') ?></td>
                             <td>
                                 <span class="badge bg-<?= $u['role'] === 'super_admin' ? 'danger' : ($u['role'] === 'admin' ? 'warning' : 'info') ?>">
@@ -131,7 +171,7 @@ require_once __DIR__ . '/../templates/layouts/header.php';
                                 <?php if ($u['depth'] !== null): ?>
                                     <span class="badge bg-success">Active (Depth <?= $u['depth'] ?>)</span>
                                 <?php else: ?>
-                                    <span class="badge bg-secondary">Inactive</span>
+                                    <span class="badge bg-warning text-dark"><i class="bi bi-clock me-1"></i>Pending Activation</span>
                                 <?php endif; ?>
                             </td>
                             <td>
@@ -140,9 +180,68 @@ require_once __DIR__ . '/../templates/layouts/header.php';
                                 </span>
                             </td>
                             <td>
-                                <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editUserModal<?= $u['id'] ?>">
-                                    <i class="bi bi-pencil me-1"></i>Edit User
-                                </button>
+                                <div class="btn-group">
+                                    <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editUserModal<?= $u['id'] ?>">
+                                        <i class="bi bi-pencil me-1"></i>Edit
+                                    </button>
+
+                                    <?php if ($u['depth'] === null): ?>
+                                        <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#activateUserModal<?= $u['id'] ?>">
+                                            <i class="bi bi-check-circle me-1"></i>Activate
+                                        </button>
+                                    <?php endif; ?>
+                                </div>
+
+                                <?php if ($u['depth'] === null): ?>
+                                    <!-- Admin Activate Member Modal -->
+                                    <div class="modal fade" id="activateUserModal<?= $u['id'] ?>" tabindex="-1">
+                                        <div class="modal-dialog">
+                                            <div class="modal-content">
+                                                <form method="POST" action="users.php">
+                                                    <input type="hidden" name="target_user_id" value="<?= $u['id'] ?>">
+                                                    <div class="modal-header bg-success text-white">
+                                                        <h5 class="modal-title"><i class="bi bi-person-check-fill me-2"></i>Activate Pending Member: <?= htmlspecialchars($u['username']) ?></h5>
+                                                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                                                    </div>
+                                                    <div class="modal-body">
+                                                        <p>Activate <strong><?= htmlspecialchars($u['full_name']) ?> (@<?= htmlspecialchars($u['username']) ?>)</strong> into the forced matrix.</p>
+
+                                                        <div class="mb-3">
+                                                            <label class="form-label fw-bold">Select Existing Unused ePIN</label>
+                                                            <select name="epin_code" class="form-select">
+                                                                <option value="">-- Choose Unused ePIN Code --</option>
+                                                                <?php foreach ($unusedEpins as $ep): ?>
+                                                                    <option value="<?= htmlspecialchars($ep['code']) ?>">
+                                                                        <?= htmlspecialchars($ep['code']) ?> (<?= htmlspecialchars($ep['package_name']) ?> - ₹<?= number_format($ep['package_price'], 2) ?>)
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
+                                                        </div>
+
+                                                        <div class="text-center text-muted fw-bold my-2">- OR AUTO-GENERATE ePIN -</div>
+
+                                                        <div class="mb-3">
+                                                            <label class="form-label fw-bold">Select Joining Package</label>
+                                                            <select name="package_id" class="form-select">
+                                                                <option value="">-- Select Package to Auto-Generate ePIN --</option>
+                                                                <?php foreach ($activePackages as $ap): ?>
+                                                                    <option value="<?= $ap['id'] ?>">
+                                                                        <?= htmlspecialchars($ap['name']) ?> (₹<?= number_format($ap['price'], 2) ?>)
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
+                                                            <small class="text-muted">If no existing ePIN is selected, an ePIN for this package will be automatically generated and applied.</small>
+                                                        </div>
+                                                    </div>
+                                                    <div class="modal-footer">
+                                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                        <button type="submit" name="admin_activate_user" value="1" class="btn btn-success"><i class="bi bi-check-lg me-1"></i>Activate Member Now</button>
+                                                    </div>
+                                                </form>
+                                            </div>
+                                        </div>
+                                    </div>
+                                <?php endif; ?>
 
                                 <!-- Edit Modal -->
                                 <div class="modal fade" id="editUserModal<?= $u['id'] ?>" tabindex="-1">
